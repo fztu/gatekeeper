@@ -177,7 +177,7 @@ class Gatekeeper(threading.Thread):
 					(now, host, location['cityName'], location['regionName'], location['countryName'], count, self.watchlist_duration)
 				self.logger.warning(message)
 
-				self.sendEmail(message, records)
+				self.sendEmail(message, records, host)
 			if (nts - self.watchlist[host]['ts']) >= self.watchlist_duration:
 				del self.watchlist[host]
 
@@ -213,11 +213,11 @@ class Gatekeeper(threading.Thread):
 			self.logger.error(type(inst))
 			self.logger.error(inst.args)
 
-	def sendEmail(self, message, records):
+	def sendEmail(self, message, records, host):
 		if self.is_ssl:
-			subject = 'WARNING!!! Gatekeeper Alert for %s(SSL)' % self.name
+			subject = 'WARNING!!! Gatekeeper Alert for %s(SSL) from %s' % (self.name, host)
 		else:
-			subject = 'WARNING!!! Gatekeeper Alert for %s' % self.name
+			subject = 'WARNING!!! Gatekeeper Alert for %s from %s' % (self.name, host)
 		
 		recipients = Config.get('basic', 'recipients').split(',')
 		sender = Config.get('basic', 'sender')
