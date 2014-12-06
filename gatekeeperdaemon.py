@@ -175,7 +175,7 @@ class Gatekeeper(threading.Thread):
 
 				message = '%s %s(%s, %s, %s) hits %s times in %s seconds.\n' % \
 					(now, host, location['cityName'], location['regionName'], location['countryName'], count, self.watchlist_duration)
-				self.logger.debug(message)
+				self.logger.warning(message)
 
 				self.sendEmail(message, records)
 			if (nts - self.watchlist[host]['ts']) >= self.watchlist_duration:
@@ -345,15 +345,17 @@ class Gatekeeper(threading.Thread):
 	def run(self):
 		try:
 			with open(self.access_log, 'rb') as log:
+				timeSlot = int(time.time())
 				n = datetime.datetime.now()
 				dt = datetime.datetime(n.year, n.month, n.day, n.hour, n.minute, 0, tzinfo=tzlocal())
 				ts = dt.isoformat(' ')
 				log.seek(0, 2)
 				while True:
-					n = datetime.datetime.now()
-					now = datetime.datetime(n.year, n.month, n.day, n.hour, n.minute, 0, tzinfo=tzlocal())
-					if (time.mktime(now.timetuple()) - time.mktime(dt.timetuple()) > 120):
-						ts = now.isoformat(' ')
+					if int(time.time()) - timeSlot >= 60:
+						timeSlot = int(time.time())
+						n = datetime.datetime.now()
+						dt = datetime.datetime(n.year, n.month, n.day, n.hour, n.minute, 0, tzinfo=tzlocal())
+						ts = dt.isoformat(' ')
 
 					self.investigate(ts)
 					line = log.readline()
@@ -369,14 +371,6 @@ class Gatekeeper(threading.Thread):
 						
 						if res.has_key("referer"):
 							res["referer"] = None if res["referer"] == "-" else res["referer"]
-						
-						tt = time.strptime(res["time"][:-6], "%d/%b/%Y:%H:%M:%S")
-						tz = Timezone(res["time"][-5:])
-						tt = list(tt[:6]) + [ 0, tz]
-						dt = datetime.datetime(*tt)
-					
-						dt = datetime.datetime(dt.year, dt.month, dt.day, dt.hour, dt.minute, 0, tzinfo=tz)
-						ts = dt.isoformat(' ')
 
 						if self.queue.has_key(res["host"]):
 							if self.queue[res["host"]].has_key(ts):
@@ -408,7 +402,7 @@ class Gatekeeper(threading.Thread):
 							self.queue[res["host"]][ts] = record
 
 					else:
-						time.sleep(0.5)          # avoid busy waiting
+						time.sleep(30)          # avoid busy waiting
 	            		# f.seek(0, io.SEEK_CUR) # appears to be unneccessary
 						continue
 		except IOError:
