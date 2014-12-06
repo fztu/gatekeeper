@@ -1,0 +1,33 @@
+#!/usr/bin/python
+#chkconfig: 345 99 10
+#description: Gatekeeper Service.
+
+import sys, time, syslog
+sys.path.append('/opt/gatekeeper')
+
+from gatekeeperdaemon import GatekeeperDaemon
+
+
+if __name__ == "__main__":
+    daemon = GatekeeperDaemon('/tmp/GateKeeperDaemon.pid')
+    if len(sys.argv) == 2:
+        if 'start' == sys.argv[1]:
+            print 'Starting GateKeeper Service...'
+            syslog.syslog('Starting GateKeeper Service...')
+            daemon.start()
+        elif 'stop' == sys.argv[1]:
+            print 'Stopping GateKeeper Service...'
+            syslog.syslog('Stopping GateKeeper Service...')
+            daemon.stop()
+        elif 'restart' == sys.argv[1]:
+            print 'Restarting GateKeeper Service...'
+            syslog.syslog('Restarting GateKeeper Service...')
+            daemon.restart()
+        else:
+            print "Unknown command"
+            sys.exit(2)
+            sys.exit(0)
+    else:
+        print "usage: %s start|stop|restart" % sys.argv[0]
+        sys.exit(2)
+
