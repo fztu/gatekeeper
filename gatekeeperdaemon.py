@@ -308,6 +308,7 @@ class Gatekeeper(threading.Thread):
 	def investigate(self, ts):
 		self.checkWatchlist()
 
+		inWatchlist = []  # Use to check the keys of metrics whether its host is at watchlist.
 		reqs = []
 		metrics = {}
 		hosts = self.queue.keys()
@@ -329,15 +330,25 @@ class Gatekeeper(threading.Thread):
 						self.logger.info(message)
 					else:
 						self.logger.info(message)
+
 					key = 'Component/Host/Hit Count/%s/%s[hits]' % (self.protocol, host)
 					metrics[key] = count
+
+					# If the host is at watchlist, the value will be sent to new relic even under 60 hits.
+					if host in self.watchlist.keys():
+						inWatchlist.append(key)
+
 					del self.queue[host][tsz]
+
 			if len(self.queue[host]) == 0:
 				del self.queue[host]
 		if len(metrics) > 0 and self.enable_newrelic:
 			appTotalHits = self.getMetricsValues(metrics.values())
-			metrics = dict((key,value) for key, value in metrics.iteritems() if value > 60)
+
+			# Only collect metrics with the values over 60 hits or the hosts at watchlist. 
+			metrics = dict((key,value) for key, value in metrics.iteritems() if value > 60 or key in inWatchlist)
 			key = 'Component/App/Hit Count/%s[hits]' % self.protocol
+			
 			metrics[key] = appTotalHits
 			reqMetrics = self.getReqMetrics(reqs)
 			self.sendMetrics(dict(metrics, **reqMetrics))
