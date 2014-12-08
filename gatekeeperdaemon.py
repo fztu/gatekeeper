@@ -447,18 +447,24 @@ class GatekeeperDaemon(Daemon):
 				enable = int(Config.get('appnames', appname))
 				if enable:
 					access_log = Config.get(appname, 'access_log')
-					gatekeeper = Gatekeeper(access_log, appname, warning_connection_level)
-					#gatekeeper.daemon = True
-					gatekeeper.start()
-					#gatekeeper.join()
-					syslog.syslog('%s gatekeeper thread starting...' % appname)
+					if access_log != '':
+						gatekeeper = Gatekeeper(access_log, appname, warning_connection_level)
+						#gatekeeper.daemon = True
+						gatekeeper.start()
+						#gatekeeper.join()
+						syslog.syslog('%s gatekeeper thread starting...' % appname)
+					else:
+						syslog.syslog('Please specify the access_log for %s.' % appname)
 
 					ssl_access_log = Config.get(appname, 'ssl_access_log')
-					sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connection_level, 1)
-					#sslgatekeeper.daemon = True
-					sslgatekeeper.start()
-					#sslgatekeeper.join()
-					syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
+					if ssl_access_log != '':
+						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connection_level, 1)
+						#sslgatekeeper.daemon = True
+						sslgatekeeper.start()
+						#sslgatekeeper.join()
+						syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
+					else:
+						syslog.syslog('Please specify the ssl_access_log for %s.' % appname)
 
 		except Exception, e:
 			self.formatExceptionInfo()
