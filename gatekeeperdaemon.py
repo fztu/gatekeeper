@@ -144,14 +144,14 @@ class Gatekeeper(threading.Thread):
 					key = 'Component/MethodReqHost/Hit Count/%s/%s %s %s[hits]' % \
 						(self.protocol, method, req_url, host)
 					methodReqHostMetrics[key] = reqDict[method][req_url][host]
-					if methodReqHostMetrics[key] > 60:
-						reqMetrics[key] = methodReqHostMetrics[key]
+					#if methodReqHostMetrics[key] > 60:
+					#	reqMetrics[key] = methodReqHostMetrics[key]
 
 				key = 'Component/MethodReq/Hit Count/%s/%s %s[hits]' % \
 						(self.protocol, method, req_url)
 				methodReqMetrics[key] = self.getMetricsValues(methodReqHostMetrics.values())
-				if methodReqMetrics[key]['max'] > 60:
-					reqMetrics[key] = methodReqMetrics[key]
+				#if methodReqMetrics[key]['max'] > 60:
+				#	reqMetrics[key] = methodReqMetrics[key]
 
 			key = 'Component/Method/Hit Count/%s/%s[hits]' % \
 					(self.protocol, method)
@@ -347,7 +347,7 @@ class Gatekeeper(threading.Thread):
 
 			# Only collect metrics with the values over 60 hits or the hosts at watchlist. 
 			metrics = dict((key,value) for key, value in metrics.iteritems() if value > 60 or key in inWatchlist)
-			key = 'Component/App/Hit Count/%s[hits]' % self.protocol
+			key = 'Component/WebApp/Hit Count/%s[hits]' % self.protocol
 			
 			metrics[key] = appTotalHits
 			reqMetrics = self.getReqMetrics(reqs)
@@ -415,7 +415,11 @@ class Gatekeeper(threading.Thread):
 					else:
 						time.sleep(30)          # avoid busy waiting
 	            		# f.seek(0, io.SEEK_CUR) # appears to be unneccessary
-						continue
+						if os.path.exists(self.access_log):
+							continue
+						else:
+							self.kill()
+
 		except IOError:
 			syslog.syslog('Error(%s): can\'t find file (%s) or read data.' % (self.name, self.access_log))
 
@@ -442,29 +446,51 @@ class GatekeeperDaemon(Daemon):
 
 	def run(self):
 		try:
+			threadSet = {}
 			appnames = Config.options('appnames')
 			for appname in appnames:
 				enable = int(Config.get('appnames', appname))
 				if enable:
+					t = {}
 					access_log = Config.get(appname, 'access_log')
 					if access_log != '':
 						gatekeeper = Gatekeeper(access_log, appname, warning_connection_level)
-						#gatekeeper.daemon = True
 						gatekeeper.start()
-						#gatekeeper.join()
 						syslog.syslog('%s gatekeeper thread starting...' % appname)
+						t['access_log'] = access_log
+						t['gatekeeper'] = gatekeeper
 					else:
 						syslog.syslog('Please specify the access_log for %s.' % appname)
 
 					ssl_access_log = Config.get(appname, 'ssl_access_log')
 					if ssl_access_log != '':
 						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connection_level, 1)
-						#sslgatekeeper.daemon = True
 						sslgatekeeper.start()
-						#sslgatekeeper.join()
 						syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
+						t['ssl_access_log'] = ssl_access_log
+						t['sslgatekeeper'] = sslgatekeeper
 					else:
 						syslog.syslog('Please specify the ssl_access_log for %s.' % appname)
+
+					threadSet[appname] = t
+
+			while len(threadSet) > 0:
+				time.sleep(1)
+				for k, v in threadSet.items():
+					if v.has_key('gatekeeper') and not v['gatekeeper'].isAlive():
+						syslog.syslog('%s gatekeeper is not alive...' % k)
+						if os.path.exists(v['access_log']):
+							gatekeeper = Gatekeeper(v['access_log'], k, warning_connection_level)
+							gatekeeper.start()
+							syslog.syslog('%s gatekeeper thread starting...' % k)
+							threadSet[k]['gatekeeper'] = gatekeeper
+					if v.has_key('sslgatekeeper') and not v['sslgatekeeper'].isAlive():
+						syslog.syslog('%s ssl gatekeeper is not alive...' % k)
+						if os.path.exists(v['ssl_access_log']):
+							sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connection_level, 1)
+							sslgatekeeper.start()
+							syslog.syslog('%s ssl gatekeeper thread starting...' % k)
+							threadSet[k]['sslgatekeeper'] = sslgatekeeper
 
 		except Exception, e:
 			self.formatExceptionInfo()
