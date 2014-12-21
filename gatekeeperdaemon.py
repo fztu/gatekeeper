@@ -34,10 +34,16 @@ enable_newrelic = int(Config.get('basic', 'enable_newrelic'))
 ipinfodb_key = Config.get('basic', 'ipinfodb_key')
 ip_info = pyipinfodb.IPInfo(ipinfodb_key)
 
-warning_connection_level = int(Config.get('basic', 'warning_connection_level'))
-ssl_warning_connection_level = int(Config.get('basic', 'ssl_warning_connection_level'))
+warning_connections = int(Config.get('basic', 'warning_connections'))
+ssl_warning_connections = int(Config.get('basic', 'ssl_warning_connections'))
 max_in_list = int(Config.get('basic', 'max_in_list'))
 watchlist_duration = int(Config.get('basic', 'watchlist_duration'))
+alert_level = int(Config.get('basic', 'alert_level'))
+ssl_alert_level = int(Config.get('basic', 'ssl_alert_level'))
+block_level = int(Config.get('basic', 'block_level'))
+ssl_block_level = int(Config.get('basic', 'ssl_block_level'))
+block_check_duration = int(Config.get('basic', 'block_check_duration'))
+
 exception_ips = (Config.get('basic', 'exception_ips')).split(',')
 parts = (Config.get('basic', 'parts')).split(',')
 ssl_parts = (Config.get('basic', 'ssl_parts')).split(',')
@@ -60,7 +66,7 @@ class Timezone(datetime.tzinfo):
 
 
 class Gatekeeper(threading.Thread):
-	def __init__(self, access_log, appname, warning_connection_level, is_ssl=0):
+	def __init__(self, access_log, appname, warning_connections, alert_level, block_level, is_ssl=0):
 		threading.Thread.__init__(self)
 		self.queue = {}
 		self.watchlist = {}
@@ -69,7 +75,9 @@ class Gatekeeper(threading.Thread):
 			else re.compile(r'\s+'.join(parts)+r'\s*\Z')
 		
 		self.access_log = access_log
-		self.warning_connection_level = warning_connection_level
+		self.warning_connections = warning_connections
+		self.alert_level = alert_level
+		self.block_level = block_level
 
 		GATEKEEPER_NAME = 'gatekeeper' + '_' + appname + '_' + 'ssl' if is_ssl else 'gatekeeper' + '_' + appname
 
@@ -96,6 +104,12 @@ class Gatekeeper(threading.Thread):
 		self.max_in_list = max_in_list
 		self.watchlist_duration = watchlist_duration
 		self.exception_ips = exception_ips
+
+	def blockHost(self, host):
+		blockInput = 'iptables -A INPUT -s %s/32 -j DROP' % host
+		blockOutput = 'iptables -A OUTPUT -d %s/32 -j DROP' % host
+		os.system(blockInput)
+		os.system(blockOutput)
 
 	def getMetricsValues(self, values):
 		theValues = []
@@ -172,12 +186,25 @@ class Gatekeeper(threading.Thread):
 				now = (now.replace(tzinfo=tzlocal())).isoformat(' ')
 				count = self.watchlist[host]['count']
 				records = json.loads(self.watchlist[host]['raw_json'])
+				watchDuration = nts - self.watchlist[host]['sts']
 
-				message = '%s %s(%s, %s, %s) hits %s times in %s seconds.\n' % \
-					(now, host, location['cityName'], location['regionName'], location['countryName'], count, self.watchlist_duration)
-				self.logger.warning(message)
+				# When count is over warning_connections * alert_level, an email will be sent out.
+				if count >= (self.warning_connections * self.alert_level):
+					message = '%s %s(%s, %s, %s) hits %s times in %s seconds.\n' % \
+						(now, host, location['cityName'], location['regionName'], location['countryName'], count, watchDuration)
+					self.logger.warning(message)
+
+				# When count is over warning_connections * block_level, the host will be blocked.
+				if count >= (self.warning_connections * self.block_level) and watchDuration <= block_check_duration:
+					self.blockHost(host)
+					block_message = '%s is blocked!!' % host
+					self.logger.warning(block_message)
+					message = '<p>%s</p><p>%s</p>' % (message, block_message)
 
 				self.sendEmail(message, records, host)
+
+			# If the host at watchlist is over the watchlist_duration without reaching the warning_connections,
+			# the host will be removed from watchlist.		
 			if (nts - self.watchlist[host]['ts']) >= self.watchlist_duration:
 				del self.watchlist[host]
 
@@ -186,7 +213,7 @@ class Gatekeeper(threading.Thread):
 			blackrecord = self.watchlist[host]
 			blackrecord['count'] = blackrecord['count'] + record['count']
 			
-			if record['count'] >= self.warning_connection_level:
+			if record['count'] >= self.warning_connections:
 				blackrecord['in_list'] = blackrecord['in_list'] + 1
 
 			raw_json = json.loads(blackrecord['raw_json'])
@@ -199,6 +226,7 @@ class Gatekeeper(threading.Thread):
 			nts = int(time.time())
 			blackrecord = {}
 			blackrecord['ts'] = nts
+			blackrecord['sts'] = nts
 			blackrecord['count'] = record['count']
 			blackrecord['in_list'] = 1
 			blackrecord['raw_json'] = record['raw_json']
@@ -322,7 +350,7 @@ class Gatekeeper(threading.Thread):
 
 					count = self.queue[host][tsz]["count"]
 					message = '%s %s %s' % (tsz, host, count)				
-					if count >= self.warning_connection_level and host not in self.exception_ips:
+					if count >= self.warning_connections and host not in self.exception_ips:
 						self.addToWatchlist(host, self.queue[host][tsz])
 						self.logger.warning(message)
 					elif host in self.watchlist.keys():
@@ -454,7 +482,7 @@ class GatekeeperDaemon(Daemon):
 					t = {}
 					access_log = Config.get(appname, 'access_log')
 					if access_log != '':
-						gatekeeper = Gatekeeper(access_log, appname, warning_connection_level)
+						gatekeeper = Gatekeeper(access_log, appname, warning_connections, alert_level, block_level)
 						gatekeeper.start()
 						syslog.syslog('%s gatekeeper thread starting...' % appname)
 						t['access_log'] = access_log
@@ -464,7 +492,7 @@ class GatekeeperDaemon(Daemon):
 
 					ssl_access_log = Config.get(appname, 'ssl_access_log')
 					if ssl_access_log != '':
-						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connection_level, 1)
+						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connections, ssl_alert_level, ssl_block_level,1)
 						sslgatekeeper.start()
 						syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
 						t['ssl_access_log'] = ssl_access_log
@@ -480,14 +508,14 @@ class GatekeeperDaemon(Daemon):
 					if v.has_key('gatekeeper') and not v['gatekeeper'].isAlive():
 						syslog.syslog('%s gatekeeper is not alive...' % k)
 						if os.path.exists(v['access_log']):
-							gatekeeper = Gatekeeper(v['access_log'], k, warning_connection_level)
+							gatekeeper = Gatekeeper(v['access_log'], k, warning_connections, alert_level, block_level)
 							gatekeeper.start()
 							syslog.syslog('%s gatekeeper thread starting...' % k)
 							threadSet[k]['gatekeeper'] = gatekeeper
 					if v.has_key('sslgatekeeper') and not v['sslgatekeeper'].isAlive():
 						syslog.syslog('%s ssl gatekeeper is not alive...' % k)
 						if os.path.exists(v['ssl_access_log']):
-							sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connection_level, 1)
+							sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
 							sslgatekeeper.start()
 							syslog.syslog('%s ssl gatekeeper thread starting...' % k)
 							threadSet[k]['sslgatekeeper'] = sslgatekeeper
