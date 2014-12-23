@@ -341,35 +341,29 @@ class Gatekeeper(threading.Thread):
 		metrics = {}
 		hosts = self.queue.keys()
 		for host in hosts:
-			tszs = self.queue[host].keys()
-			for tsz in tszs:
-				if tsz != ts:
 
-					for line in json.loads(self.queue[host][tsz]["raw_json"]):
-						reqs.append(line)
+			for line in json.loads(self.queue[host]["raw_json"]):
+				reqs.append(line)
 
-					count = self.queue[host][tsz]["count"]
-					message = '%s %s %s' % (tsz, host, count)				
-					if count >= self.warning_connections and host not in self.exception_ips:
-						self.addToWatchlist(host, self.queue[host][tsz])
-						self.logger.warning(message)
-					elif host in self.watchlist.keys():
-						self.addToWatchlist(host, self.queue[host][tsz])
-						self.logger.info(message)
-					else:
-						self.logger.info(message)
+			count = self.queue[host]["count"]
+			message = '%s %s %s' % (ts, host, count)				
+			if count >= self.warning_connections and host not in self.exception_ips:
+				self.addToWatchlist(host, self.queue[host])
+				self.logger.warning(message)
+			elif host in self.watchlist.keys():
+				self.addToWatchlist(host, self.queue[host])
+				self.logger.info(message)
+			else:
+				self.logger.info(message)
 
-					key = 'Component/Host/Hit Count/%s/%s[hits]' % (self.protocol, host)
-					metrics[key] = count
+			key = 'Component/Host/Hit Count/%s/%s[hits]' % (self.protocol, host)
+			metrics[key] = count
 
-					# If the host is at watchlist, the value will be sent to new relic even under 60 hits.
-					if host in self.watchlist.keys():
-						inWatchlist.append(key)
+			# If the host is at watchlist, the value will be sent to new relic even under 60 hits.
+			if host in self.watchlist.keys():
+				inWatchlist.append(key)
+			del self.queue[host]
 
-					del self.queue[host][tsz]
-
-			if len(self.queue[host]) == 0:
-				del self.queue[host]
 		if len(metrics) > 0 and self.enable_newrelic:
 			appTotalHits = self.getMetricsValues(metrics.values())
 
@@ -391,12 +385,12 @@ class Gatekeeper(threading.Thread):
 				log.seek(0, 2)
 				while True:
 					if int(time.time()) - timeSlot >= 60:
+						self.investigate(ts)
 						timeSlot = int(time.time())
 						n = datetime.datetime.now()
 						dt = datetime.datetime(n.year, n.month, n.day, n.hour, n.minute, 0, tzinfo=tzlocal())
 						ts = dt.isoformat(' ')
 
-					self.investigate(ts)
 					line = log.readline()
 					m = self.pattern.match(line)
 					if m is not None:
@@ -412,23 +406,13 @@ class Gatekeeper(threading.Thread):
 							res["referer"] = None if res["referer"] == "-" else res["referer"]
 
 						if self.queue.has_key(res["host"]):
-							if self.queue[res["host"]].has_key(ts):
-								record = self.queue[res["host"]][ts]
-								record['count'] = record['count'] + 1
-								raw_json = json.loads(record['raw_json'])
-								raw_json.append(res)
-								raw_json = json.dumps(raw_json)
-								record['raw_json'] = raw_json
-								self.queue[res["host"]][ts] = record
-							else:
-								record = {}
-								record['count'] = 1
-								raw_json = []
-								raw_json.append(res)
-								raw_json = json.dumps(raw_json)
-								record['raw_json'] = raw_json
-								self.queue[res["host"]][ts] = {}
-								self.queue[res["host"]][ts] = record
+							record = self.queue[res["host"]]
+							record['count'] = record['count'] + 1
+							raw_json = json.loads(record['raw_json'])
+							raw_json.append(res)
+							raw_json = json.dumps(raw_json)
+							record['raw_json'] = raw_json
+							self.queue[res["host"]] = record
 						else:
 							record = {}
 							record['count'] = 1
@@ -437,16 +421,19 @@ class Gatekeeper(threading.Thread):
 							raw_json = json.dumps(raw_json)
 							record['raw_json'] = raw_json
 							self.queue[res["host"]] = {}
-							self.queue[res["host"]][ts] = {}
-							self.queue[res["host"]][ts] = record
+							self.queue[res["host"]] = record
 
 					else:
 						time.sleep(30)          # avoid busy waiting
-	            		# f.seek(0, io.SEEK_CUR) # appears to be unneccessary
+						#continue
 						if os.path.exists(self.access_log):
 							continue
 						else:
-							self.kill()
+							if not self.is_ssl:
+								syslog.syslog('%s gatekeeper thread exiting...' % self.name)
+							else:
+								syslog.syslog('%s ssl gatekeeper thread exiting...' % self.name)
+							break
 
 		except IOError:
 			syslog.syslog('Error(%s): can\'t find file (%s) or read data.' % (self.name, self.access_log))
@@ -508,6 +495,8 @@ class GatekeeperDaemon(Daemon):
 					if v.has_key('gatekeeper') and not v['gatekeeper'].isAlive():
 						syslog.syslog('%s gatekeeper is not alive...' % k)
 						if os.path.exists(v['access_log']):
+							v['gatekeeper'].join()
+							del threadSet[k]['gatekeeper']
 							gatekeeper = Gatekeeper(v['access_log'], k, warning_connections, alert_level, block_level)
 							gatekeeper.start()
 							syslog.syslog('%s gatekeeper thread starting...' % k)
@@ -515,6 +504,8 @@ class GatekeeperDaemon(Daemon):
 					if v.has_key('sslgatekeeper') and not v['sslgatekeeper'].isAlive():
 						syslog.syslog('%s ssl gatekeeper is not alive...' % k)
 						if os.path.exists(v['ssl_access_log']):
+							v['sslgatekeeper'].join()
+							del threadSet[k]['sslgatekeeper']
 							sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
 							sslgatekeeper.start()
 							syslog.syslog('%s ssl gatekeeper thread starting...' % k)
