@@ -5,8 +5,7 @@ import os
 import traceback
 import time 
 import datetime
-import json 
-import re 
+import json
 import logging
 import logging.handlers
 import pyipinfodb
@@ -22,15 +21,28 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import StringIO
 import csv
+import httplib
 
 Config = ConfigParser.ConfigParser()
 Config.read("/opt/gatekeeper/gatekeeper.cfg")
 
 __version__ = Config.get('basic', 'version')
+
+# NewRelic Setting.
 guid = 'com.silksoftware.plugin.gatekeeper'
 newrelic_endpoint = 'https://platform-api.newrelic.com/platform/v1/metrics'
-license_key = Config.get('basic', 'license_key')
+newrelic_license_key = Config.get('basic', 'newrelic_license_key')
 enable_newrelic = int(Config.get('basic', 'enable_newrelic'))
+
+# LogEntries Setting.
+logentries_endpoint = 'api.logentries.com'
+logentries_account_key = Config.get('basic', 'logentries_account_key')
+logentries_host_key = Config.get('basic', 'logentries_host_key')
+logentries_log_key = Config.get('basic', 'logentries_log_key')
+logentries_ssl_log_key = Config.get('basic', 'logentries_ssl_log_key')
+enable_logentries = int(Config.get('basic', 'enable_logentries'))
+
+# IPInfoDB Setting.
 ipinfodb_key = Config.get('basic', 'ipinfodb_key')
 ip_info = pyipinfodb.IPInfo(ipinfodb_key)
 
@@ -45,9 +57,6 @@ ssl_block_level = int(Config.get('basic', 'ssl_block_level'))
 block_check_duration = int(Config.get('basic', 'block_check_duration'))
 
 exception_ips = (Config.get('basic', 'exception_ips')).split(',')
-parts = (Config.get('basic', 'parts')).split(',')
-ssl_parts = (Config.get('basic', 'ssl_parts')).split(',')
-
 
 class Timezone(datetime.tzinfo):
 	def __init__(self, name="+0000"):
@@ -71,9 +80,6 @@ class Gatekeeper(threading.Thread):
 		self.queue = {}
 		self.watchlist = {}
 		self.is_ssl = is_ssl
-		self.pattern = re.compile(r'\s+'.join(ssl_parts)+r'\s*\Z') if self.is_ssl \
-			else re.compile(r'\s+'.join(parts)+r'\s*\Z')
-		
 		self.access_log = access_log
 		self.warning_connections = warning_connections
 		self.alert_level = alert_level
@@ -90,12 +96,14 @@ class Gatekeeper(threading.Thread):
 		formatter = logging.Formatter('%(levelname)-8s %(message)s')
 		handler.setFormatter(formatter)
 		self.logger.addHandler(handler)
+		
+		# Setup for NewRelic
 		self.agent_data = {'host': socket.gethostname(),
 							'pid': os.getpid(),
 							'version': __version__}
 		self.http_headers = {'Accept': 'application/json',
 							'Content-Type': 'application/json',
-							'X-License-Key': license_key}
+							'X-License-Key': newrelic_license_key}
 		self.endpint = newrelic_endpoint
 		self.name = appname
 		self.guid = guid
@@ -105,32 +113,32 @@ class Gatekeeper(threading.Thread):
 		self.watchlist_duration = watchlist_duration
 		self.exception_ips = exception_ips
 
+		# Setup for LogEntries
+		self.logentries_endpoint = logentries_endpoint
+		self.logentries_account_key = logentries_account_key
+		self.logentries_host_key = logentries_host_key
+		self.logentries_log_key = logentries_ssl_log_key if is_ssl else logentries_log_key
+		self.enable_logentries = enable_logentries
+
+	def isJson(self, line):
+		try:
+			json_object = json.loads(line)
+		except ValueError, e:
+			return False
+		return True
+
 	def blockHost(self, host):
 		blockInput = 'iptables -A INPUT -s %s/32 -j DROP' % host
 		blockOutput = 'iptables -A OUTPUT -d %s/32 -j DROP' % host
 		os.system(blockInput)
 		os.system(blockOutput)
 
-	def getMetricsValues(self, values):
-		theValues = []
-		for value in values:
-			if isinstance(value, dict):
-				theValues.append(value['total'])
-			else:
-				theValues.append(value)
-
-		return {'total': sum(theValues),
-				'count': len(theValues),
-				'min': min(theValues),
-				'max': max(theValues),
-				'sum_of_squares': sum([i**2 for i in theValues])}
-
+	# Deprecation	
 	def getReqMetrics(self, reqs):
 		reqDict = {}
 		for req in reqs:
-			req_str = (req['request']).split(' ')
-			method = req_str[0]
-			req_url = req_str[1].replace('/', '\\')
+			method = req['method']
+			req_url = req['request']
 			host = req['host']
 			if reqDict.has_key(method):
 				if reqDict[method].has_key(req_url):
@@ -172,7 +180,21 @@ class Gatekeeper(threading.Thread):
 			methodMetrics[key] = self.getMetricsValues(methodReqMetrics.values())
 			reqMetrics[key] = methodMetrics[key]	
 
-		return reqMetrics
+		return reqMetrics	
+
+	def getMetricsValues(self, values):
+		theValues = []
+		for value in values:
+			if isinstance(value, dict):
+				theValues.append(value['total'])
+			else:
+				theValues.append(value)
+
+		return {'total': sum(theValues),
+				'count': len(theValues),
+				'min': min(theValues),
+				'max': max(theValues),
+				'sum_of_squares': sum([i**2 for i in theValues])}
 
 	def checkWatchlist(self):
 		nts = int(time.time())
@@ -304,8 +326,13 @@ class Gatekeeper(threading.Thread):
 		csvwriter = csv.writer(csvfile)
 		for i in range(0, len(records)):
 			if i == 0:
-				csvwriter.writerow(records[i].keys()) 
-			csvwriter.writerow(records[i].values())
+				keys = ['webApp', 'time', 'host', 'method', 'request',\
+						'query', 'status', 'size', 'referer', 'userAgent', 'responseTime']
+				csvwriter.writerow(keys)
+			values = [records[i]['webApp'], records[i]['time'], records[i]['host'], records[i]['method'],\
+					records[i]['request'], records[i]['query'], records[i]['status'], records[i]['size'],\
+					records[i]['referer'], records[i]['userAgent'], records[i]['responseTime']] 
+			csvwriter.writerow(values)
 		
 		csv_part = MIMEText(csvfile.getvalue(), 'csv')
 		csv_part.add_header('Content-Disposition', 'attachment', filename=filename), outer.attach(csv_part)
@@ -332,6 +359,15 @@ class Gatekeeper(threading.Thread):
 			self.logger.error('Error reporting stats: %s', error)
 		except requests.Timeout as error:
 			self.logger.error('TimeoutError reporting stats: %s', error)
+
+	def sendLogEntries(self, reqs):
+		addr = '/%s/hosts/%s/%s?realtime=1' % \
+			(self.logentries_account_key, self.logentries_host_key, self.logentries_log_key)
+		conn = httplib.HTTPConnection(self.logentries_endpoint)
+		conn.request('PUT', addr)
+		for req in reqs:
+			conn.send(json.dumps(req) + '\n')
+		conn.close()
 
 	def investigate(self, ts):
 		self.checkWatchlist()
@@ -372,8 +408,13 @@ class Gatekeeper(threading.Thread):
 			key = 'Component/WebApp/Hit Count/%s[hits]' % self.protocol
 			
 			metrics[key] = appTotalHits
-			reqMetrics = self.getReqMetrics(reqs)
-			self.sendMetrics(dict(metrics, **reqMetrics))
+			self.sendMetrics(metrics)
+			# Deprecation line 115
+			#reqMetrics = self.getReqMetrics(reqs)
+			#self.sendMetrics(dict(metrics, **reqMetrics))
+
+		if len(reqs) > 0 and self.enable_logentries:
+			self.sendLogEntries(reqs)
 	
 	def run(self):
 		try:
@@ -392,18 +433,13 @@ class Gatekeeper(threading.Thread):
 						ts = dt.isoformat(' ')
 
 					line = log.readline()
-					m = self.pattern.match(line)
-					if m is not None:
-						res = m.groupdict()
-						#print res
-						res["user"] = None if res["user"] == "-" else res["user"]
-
+					if self.isJson(line):
+						res = json.loads(line)
+						res["query"] = None if res["query"] == '' else res["query"]
 						res["status"] = int(res["status"])
-
 						res["size"] = 0	if res["size"] == "-" else int(res["size"])
-						
-						if res.has_key("referer"):
-							res["referer"] = None if res["referer"] == "-" else res["referer"]
+						res["referer"] = None if res["referer"] == "-" else res["referer"]
+						res["responseTime"] = int(res["responseTime"])
 
 						if self.queue.has_key(res["host"]):
 							record = self.queue[res["host"]]
@@ -425,15 +461,15 @@ class Gatekeeper(threading.Thread):
 
 					else:
 						time.sleep(30)          # avoid busy waiting
-						#continue
-						if os.path.exists(self.access_log):
-							continue
-						else:
-							if not self.is_ssl:
-								syslog.syslog('%s gatekeeper thread exiting...' % self.name)
-							else:
-								syslog.syslog('%s ssl gatekeeper thread exiting...' % self.name)
-							break
+						continue
+						#if os.path.exists(self.access_log):
+						#	continue
+						#else:
+						#	if not self.is_ssl:
+						#		syslog.syslog('%s gatekeeper thread exiting...' % self.name)
+						#	else:
+						#		syslog.syslog('%s ssl gatekeeper thread exiting...' % self.name)
+						#	break
 
 		except IOError:
 			syslog.syslog('Error(%s): can\'t find file (%s) or read data.' % (self.name, self.access_log))
