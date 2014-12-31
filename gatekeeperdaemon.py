@@ -135,6 +135,7 @@ class Gatekeeper(threading.Thread):
 		self.enable_logentries = enable_logentries
 
 	# Ping the webApp to check whether it is alive or not.
+	@synchronized(theLock)
 	def pingWebApp(self):
 		proxies = {"http": "http://24.250.92.34:3131", "https": "http://24.250.92.34:3131"}
 		url = 'https://' + self.name if self.is_ssl else 'http://' + self.name
@@ -473,7 +474,6 @@ class Gatekeeper(threading.Thread):
 		if len(reqs) > 0 and self.enable_logentries:
 			self.sendLogEntries(reqs)
 	
-	@synchronized(theLock)
 	def run(self):
 		# checkThread = False  ## Ping the webApp
 		threadLife = 1800
