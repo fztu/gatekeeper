@@ -58,6 +58,20 @@ block_check_duration = int(Config.get('basic', 'block_check_duration'))
 
 exception_ips = (Config.get('basic', 'exception_ips')).split(',')
 
+theLock = threading.Lock()
+
+def synchronized(lock):
+	'''Synchronization decorator.'''
+	def wrap(f):
+		def newFunction(*args, **kw):
+			lock.acquire()
+			try:
+				return f(*args, **kw)
+			finally:
+				lock.release()
+		return newFunction
+	return wrap
+
 class Timezone(datetime.tzinfo):
 	def __init__(self, name="+0000"):
 		self.name = name
@@ -119,6 +133,47 @@ class Gatekeeper(threading.Thread):
 		self.logentries_host_key = logentries_host_key
 		self.logentries_log_key = logentries_ssl_log_key if is_ssl else logentries_log_key
 		self.enable_logentries = enable_logentries
+
+	# Ping the webApp to check whether it is alive or not.
+	def pingWebApp(self):
+		proxies = {"http": "http://24.250.92.34:3131", "https": "http://24.250.92.34:3131"}
+		url = 'https://' + self.name if self.is_ssl else 'http://' + self.name
+		try:
+			r = requests.get(url, timeout=10, verify=True, proxies=proxies)
+			if r.status_code == 200:
+				return (True, '')
+			else:
+				errorMsg = 'status_code=%s' % r.status_code
+				syslog.syslog('%s: %s' % (self.name, errorMsg))
+				return (False, errorMsg)
+		except requests.exceptions.Timeout:
+			errorMsg = 'The webApp is down.  Please check!!!'
+			syslog.syslog('%s: %s' % (self.name, errorMsg))
+			return (False, errorMsg)
+		except requests.exceptions.TooManyRedirects:
+			# Tell the user their URL was bad and try a different one
+			errorMsg = 'The URL was bad and try a different one.'
+			self.sendAlert(errorMsg)
+			syslog.syslog('%s: %s' % (self.name, errorMsg))
+			sys.exit(1)
+		except requests.exceptions.ConnectionError:
+			# Connection aborted. Name or service not known.
+			errorMsg = 'Connection aborted. Name or service not known.'
+			syslog.syslog('%s: %s' % (self.name, errorMsg))
+			return (False, errorMsg)
+		except requests.exceptions.RequestException as e:
+			# catastrophic error. bail.
+			self.sendAlert(e)
+			syslog.syslog('%s RequestException: %s' % (self.name, e))
+    		sys.exit(1)
+
+	def sendAlert(self, errorMsg):
+		if self.is_ssl:
+			subject = 'WARNING!!! Gatekeeper Alert for %s(SSL)' % self.name
+		else:
+			subject = 'WARNING!!! Gatekeeper Alert for %s' % self.name
+		recipients = Config.get('basic', 'recipients').split(',')
+		self.sendEmail(errorMsg, subject, recipients)
 
 	def isJson(self, line):
 		try:
@@ -200,6 +255,7 @@ class Gatekeeper(threading.Thread):
 		nts = int(time.time())
 		hosts = self.watchlist.keys()
 		for host in hosts:
+			message = ''
 			if self.watchlist[host]['in_list'] >= self.max_in_list:
 				self.watchlist[host]['in_list'] = 0
 				self.watchlist[host]['ts'] = nts
@@ -223,7 +279,13 @@ class Gatekeeper(threading.Thread):
 					self.logger.warning(block_message)
 					message = '<p>%s</p><p>%s</p>' % (message, block_message)
 
-				self.sendEmail(message, records, host)
+				if message != '':
+					if self.is_ssl:
+						subject = 'WARNING!!! Gatekeeper Alert for %s(SSL) from %s' % (self.name, host)
+					else:
+						subject = 'WARNING!!! Gatekeeper Alert for %s from %s' % (self.name, host)
+					recipients = Config.get('basic', 'recipients').split(',')
+					self.sendEmail(message, subject, recipients, records)
 
 			# If the host at watchlist is over the watchlist_duration without reaching the warning_connections,
 			# the host will be removed from watchlist.		
@@ -263,13 +325,7 @@ class Gatekeeper(threading.Thread):
 			self.logger.error(type(inst))
 			self.logger.error(inst.args)
 
-	def sendEmail(self, message, records, host):
-		if self.is_ssl:
-			subject = 'WARNING!!! Gatekeeper Alert for %s(SSL) from %s' % (self.name, host)
-		else:
-			subject = 'WARNING!!! Gatekeeper Alert for %s from %s' % (self.name, host)
-		
-		recipients = Config.get('basic', 'recipients').split(',')
+	def sendEmail(self, message, subject, recipients, records=None):
 		sender = Config.get('basic', 'sender')
 
 		remote_smtpserver = int(Config.get('basic', 'remote_smtpserver'))
@@ -314,28 +370,29 @@ class Gatekeeper(threading.Thread):
 		inner.attach(part2)
 		outer.attach(inner)
 
-		filename = 'apache-access-log.csv'
-		csvfile = StringIO.StringIO()
-		
-		#Python 2.7 or above
-		#csvwriter = csv.DictWriter(csvfile, records[0].keys())
-		#csvwriter.writeheader()
-		#csvwriter.writerows(records)
-		
-		#Python 2.6.6
-		csvwriter = csv.writer(csvfile)
-		for i in range(0, len(records)):
-			if i == 0:
-				keys = ['webApp', 'time', 'host', 'method', 'request',\
-						'query', 'status', 'size', 'referer', 'userAgent', 'responseTime']
-				csvwriter.writerow(keys)
-			values = [records[i]['webApp'], records[i]['time'], records[i]['host'], records[i]['method'],\
-					records[i]['request'], records[i]['query'], records[i]['status'], records[i]['size'],\
-					records[i]['referer'], records[i]['userAgent'], records[i]['responseTime']] 
-			csvwriter.writerow(values)
-		
-		csv_part = MIMEText(csvfile.getvalue(), 'csv')
-		csv_part.add_header('Content-Disposition', 'attachment', filename=filename), outer.attach(csv_part)
+		if records is not None:
+			filename = 'apache-access-log.csv'
+			csvfile = StringIO.StringIO()
+			
+			#Python 2.7 or above
+			#csvwriter = csv.DictWriter(csvfile, records[0].keys())
+			#csvwriter.writeheader()
+			#csvwriter.writerows(records)
+			
+			#Python 2.6.6
+			csvwriter = csv.writer(csvfile)
+			for i in range(0, len(records)):
+				if i == 0:
+					keys = ['webApp', 'time', 'host', 'method', 'request',\
+							'query', 'status', 'size', 'referer', 'userAgent', 'responseTime']
+					csvwriter.writerow(keys)
+				values = [records[i]['webApp'], records[i]['time'], records[i]['host'], records[i]['method'],\
+						records[i]['request'], records[i]['query'], records[i]['status'], records[i]['size'],\
+						records[i]['referer'], records[i]['userAgent'], records[i]['responseTime']] 
+				csvwriter.writerow(values)
+			
+			csv_part = MIMEText(csvfile.getvalue(), 'csv')
+			csv_part.add_header('Content-Disposition', 'attachment', filename=filename), outer.attach(csv_part)
 		return outer
 
 	def sendMetrics(self, metrics):
@@ -416,7 +473,10 @@ class Gatekeeper(threading.Thread):
 		if len(reqs) > 0 and self.enable_logentries:
 			self.sendLogEntries(reqs)
 	
+	@synchronized(theLock)
 	def run(self):
+		# checkThread = False  ## Ping the webApp
+		threadLife = 1800
 		try:
 			with open(self.access_log, 'rb') as log:
 				timeSlot = int(time.time())
@@ -434,6 +494,8 @@ class Gatekeeper(threading.Thread):
 
 					line = log.readline()
 					if self.isJson(line):
+						# checkThread = False  ## Ping the webApp
+						threadLife = 1800
 						res = json.loads(line)
 						res["query"] = None if res["query"] == '' else res["query"]
 						res["status"] = int(res["status"])
@@ -460,20 +522,46 @@ class Gatekeeper(threading.Thread):
 							self.queue[res["host"]] = record
 
 					else:
-						time.sleep(30)          # avoid busy waiting
-						continue
-						#if os.path.exists(self.access_log):
-						#	continue
-						#else:
-						#	if not self.is_ssl:
-						#		syslog.syslog('%s gatekeeper thread exiting...' % self.name)
-						#	else:
-						#		syslog.syslog('%s ssl gatekeeper thread exiting...' % self.name)
-						#	break
+						## Ping the webApp to check whether it is alive or not.
+						# if checkThread:
+						# 	if not self.is_ssl:
+						# 		syslog.syslog('%s gatekeeper thread restarting...' % self.name)
+						# 	else:
+						# 		syslog.syslog('%s ssl gatekeeper thread restarting...' % self.name)
+						# 	break
+						# else:
+						# 	sleepTime = 600
+						# 	for i in range(0, 5):
+						# 		(checkThread, errorMsg) = self.pingWebApp()
+						# 		if checkThread:
+						# 			sleepTime = 30
+						# 			break
+						# 		time.sleep(10)
+
+						# 	if not checkThread:
+						# 		self.sendAlert(errorMsg)
+						# 	time.sleep(sleepTime)
+						# 	continue
+							
+						if threadLife == 0:
+							if not self.is_ssl:
+								syslog.syslog('%s gatekeeper thread restarting...' % self.name)
+							else:
+								syslog.syslog('%s ssl gatekeeper thread restarting...' % self.name)
+							break
+						else:
+							threadLife = threadLife - 30
+							time.sleep(30)
+							continue
 
 		except IOError:
 			syslog.syslog('Error(%s): can\'t find file (%s) or read data.' % (self.name, self.access_log))
 
+		# Restart thread.
+		# if checkThread:
+		# 	self.run()
+		if threadLife == 0:
+			self.run()
 
 class GatekeeperDaemon(Daemon):
 	def formatExceptionInfo(self, maxTBlevel=5):
@@ -512,40 +600,42 @@ class GatekeeperDaemon(Daemon):
 						t['gatekeeper'] = gatekeeper
 					else:
 						syslog.syslog('Please specify the access_log for %s.' % appname)
+					time.sleep(1)
 
 					ssl_access_log = Config.get(appname, 'ssl_access_log')
 					if ssl_access_log != '':
-						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connections, ssl_alert_level, ssl_block_level,1)
+						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
 						sslgatekeeper.start()
 						syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
 						t['ssl_access_log'] = ssl_access_log
 						t['sslgatekeeper'] = sslgatekeeper
 					else:
 						syslog.syslog('Please specify the ssl_access_log for %s.' % appname)
+					time.sleep(1)
 
 					threadSet[appname] = t
 
 			while len(threadSet) > 0:
-				time.sleep(1)
 				for k, v in threadSet.items():
 					if v.has_key('gatekeeper') and not v['gatekeeper'].isAlive():
 						syslog.syslog('%s gatekeeper is not alive...' % k)
-						if os.path.exists(v['access_log']):
-							v['gatekeeper'].join()
-							del threadSet[k]['gatekeeper']
-							gatekeeper = Gatekeeper(v['access_log'], k, warning_connections, alert_level, block_level)
-							gatekeeper.start()
-							syslog.syslog('%s gatekeeper thread starting...' % k)
-							threadSet[k]['gatekeeper'] = gatekeeper
+						v['gatekeeper'].join()
+						del threadSet[k]['gatekeeper']
+						gatekeeper = Gatekeeper(v['access_log'], k, warning_connections, alert_level, block_level)
+						gatekeeper.start()
+						syslog.syslog('%s gatekeeper thread starting...' % k)
+						threadSet[k]['gatekeeper'] = gatekeeper
+					time.sleep(1)
+					
 					if v.has_key('sslgatekeeper') and not v['sslgatekeeper'].isAlive():
 						syslog.syslog('%s ssl gatekeeper is not alive...' % k)
-						if os.path.exists(v['ssl_access_log']):
-							v['sslgatekeeper'].join()
-							del threadSet[k]['sslgatekeeper']
-							sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
-							sslgatekeeper.start()
-							syslog.syslog('%s ssl gatekeeper thread starting...' % k)
-							threadSet[k]['sslgatekeeper'] = sslgatekeeper
+						v['sslgatekeeper'].join()
+						del threadSet[k]['sslgatekeeper']
+						sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
+						sslgatekeeper.start()
+						syslog.syslog('%s ssl gatekeeper thread starting...' % k)
+						threadSet[k]['sslgatekeeper'] = sslgatekeeper
+					time.sleep(1)
 
 		except Exception, e:
 			self.formatExceptionInfo()
