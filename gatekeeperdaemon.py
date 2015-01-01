@@ -54,7 +54,6 @@ alert_level = int(Config.get('basic', 'alert_level'))
 ssl_alert_level = int(Config.get('basic', 'ssl_alert_level'))
 block_level = int(Config.get('basic', 'block_level'))
 ssl_block_level = int(Config.get('basic', 'ssl_block_level'))
-block_check_duration = int(Config.get('basic', 'block_check_duration'))
 
 exception_ips = (Config.get('basic', 'exception_ips')).split(',')
 
@@ -274,7 +273,7 @@ class Gatekeeper(threading.Thread):
 					self.logger.warning(message)
 
 				# When count is over warning_connections * block_level, the host will be blocked.
-				if count >= (self.warning_connections * self.block_level) and watchDuration <= block_check_duration:
+				if count >= (self.warning_connections * self.block_level):
 					self.blockHost(host)
 					block_message = '%s is blocked!!' % host
 					self.logger.warning(block_message)
