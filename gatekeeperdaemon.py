@@ -34,14 +34,6 @@ newrelic_endpoint = 'https://platform-api.newrelic.com/platform/v1/metrics'
 newrelic_license_key = Config.get('basic', 'newrelic_license_key')
 enable_newrelic = int(Config.get('basic', 'enable_newrelic'))
 
-# LogEntries Setting.
-logentries_endpoint = 'api.logentries.com'
-logentries_account_key = Config.get('basic', 'logentries_account_key')
-logentries_host_key = Config.get('basic', 'logentries_host_key')
-logentries_log_key = Config.get('basic', 'logentries_log_key')
-logentries_ssl_log_key = Config.get('basic', 'logentries_ssl_log_key')
-enable_logentries = int(Config.get('basic', 'enable_logentries'))
-
 # IPInfoDB Setting.
 ipinfodb_key = Config.get('basic', 'ipinfodb_key')
 ip_info = pyipinfodb.IPInfo(ipinfodb_key)
@@ -125,13 +117,6 @@ class Gatekeeper(threading.Thread):
 		self.max_in_list = max_in_list
 		self.watchlist_duration = watchlist_duration
 		self.exception_ips = exception_ips
-
-		# Setup for LogEntries
-		self.logentries_endpoint = logentries_endpoint
-		self.logentries_account_key = logentries_account_key
-		self.logentries_host_key = logentries_host_key
-		self.logentries_log_key = logentries_ssl_log_key if is_ssl else logentries_log_key
-		self.enable_logentries = enable_logentries
 
 	# Ping the webApp to check whether it is alive or not.
 	@synchronized(theLock)
@@ -417,15 +402,6 @@ class Gatekeeper(threading.Thread):
 		except requests.Timeout as error:
 			self.logger.error('TimeoutError reporting stats: %s', error)
 
-	def sendLogEntries(self, reqs):
-		addr = '/%s/hosts/%s/%s?realtime=1' % \
-			(self.logentries_account_key, self.logentries_host_key, self.logentries_log_key)
-		conn = httplib.HTTPConnection(self.logentries_endpoint)
-		conn.request('PUT', addr)
-		for req in reqs:
-			conn.send(json.dumps(req) + '\n')
-		conn.close()
-
 	def investigate(self, ts):
 		self.checkWatchlist()
 
@@ -469,9 +445,6 @@ class Gatekeeper(threading.Thread):
 			# Deprecation line 115
 			#reqMetrics = self.getReqMetrics(reqs)
 			#self.sendMetrics(dict(metrics, **reqMetrics))
-
-		if len(reqs) > 0 and self.enable_logentries:
-			self.sendLogEntries(reqs)
 	
 	def run(self):
 		# checkThread = False  ## Ping the webApp
@@ -584,19 +557,15 @@ class GatekeeperDaemon(Daemon):
 
 	def run(self):
 		try:
-			threadSet = {}
 			appnames = Config.options('appnames')
 			for appname in appnames:
 				enable = int(Config.get('appnames', appname))
 				if enable:
-					t = {}
 					access_log = Config.get(appname, 'access_log')
 					if access_log != '':
 						gatekeeper = Gatekeeper(access_log, appname, warning_connections, alert_level, block_level)
 						gatekeeper.start()
 						syslog.syslog('%s gatekeeper thread starting...' % appname)
-						t['access_log'] = access_log
-						t['gatekeeper'] = gatekeeper
 					else:
 						syslog.syslog('Please specify the access_log for %s.' % appname)
 					time.sleep(1)
@@ -606,34 +575,8 @@ class GatekeeperDaemon(Daemon):
 						sslgatekeeper = Gatekeeper(ssl_access_log, appname, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
 						sslgatekeeper.start()
 						syslog.syslog('%s ssl gatekeeper thread starting...' % appname)
-						t['ssl_access_log'] = ssl_access_log
-						t['sslgatekeeper'] = sslgatekeeper
 					else:
 						syslog.syslog('Please specify the ssl_access_log for %s.' % appname)
-					time.sleep(1)
-
-					threadSet[appname] = t
-
-			while len(threadSet) > 0:
-				for k, v in threadSet.items():
-					if v.has_key('gatekeeper') and not v['gatekeeper'].isAlive():
-						syslog.syslog('%s gatekeeper is not alive...' % k)
-						v['gatekeeper'].join()
-						del threadSet[k]['gatekeeper']
-						gatekeeper = Gatekeeper(v['access_log'], k, warning_connections, alert_level, block_level)
-						gatekeeper.start()
-						syslog.syslog('%s gatekeeper thread starting...' % k)
-						threadSet[k]['gatekeeper'] = gatekeeper
-					time.sleep(1)
-					
-					if v.has_key('sslgatekeeper') and not v['sslgatekeeper'].isAlive():
-						syslog.syslog('%s ssl gatekeeper is not alive...' % k)
-						v['sslgatekeeper'].join()
-						del threadSet[k]['sslgatekeeper']
-						sslgatekeeper = Gatekeeper(v['ssl_access_log'], k, ssl_warning_connections, ssl_alert_level, ssl_block_level, 1)
-						sslgatekeeper.start()
-						syslog.syslog('%s ssl gatekeeper thread starting...' % k)
-						threadSet[k]['sslgatekeeper'] = sslgatekeeper
 					time.sleep(1)
 
 		except Exception, e:
