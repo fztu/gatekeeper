@@ -65,48 +65,6 @@ class Gatekeeper(threading.Thread):
 			ruleClass = getattr(module, rule)
 			self.rules[rule] = ruleClass(appname, is_ssl, self.logger, self.utility, self.newrelic, self.postman)
 
-	# Ping the webApp to check whether it is alive or not.
-	# @synchronized(theLock)
-	# def pingWebApp(self):
-	# 	proxies = {"http": "http://xxx.xxx.xxx.xxx:xxxx", "https": "http://xxx.xxx.xxx.xxx:xxxx"}
-	# 	url = 'https://' + self.name if self.is_ssl else 'http://' + self.name
-	# 	try:
-	# 		r = requests.get(url, timeout=10, verify=True, proxies=proxies)
-	# 		if r.status_code == 200:
-	# 			return (True, '')
-	# 		else:
-	# 			errorMsg = 'status_code=%s' % r.status_code
-	# 			syslog.syslog('%s: %s' % (self.name, errorMsg))
-	# 			return (False, errorMsg)
-	# 	except requests.exceptions.Timeout:
-	# 		errorMsg = 'The webApp is down.  Please check!!!'
-	# 		syslog.syslog('%s: %s' % (self.name, errorMsg))
-	# 		return (False, errorMsg)
-	# 	except requests.exceptions.TooManyRedirects:
-	# 		# Tell the user their URL was bad and try a different one
-	# 		errorMsg = 'The URL was bad and try a different one.'
-	# 		self.sendAlert(errorMsg)
-	# 		syslog.syslog('%s: %s' % (self.name, errorMsg))
-	# 		sys.exit(1)
-	# 	except requests.exceptions.ConnectionError:
-	# 		# Connection aborted. Name or service not known.
-	# 		errorMsg = 'Connection aborted. Name or service not known.'
-	# 		syslog.syslog('%s: %s' % (self.name, errorMsg))
-	# 		return (False, errorMsg)
-	# 	except requests.exceptions.RequestException as e:
-	# 		# catastrophic error. bail.
-	# 		self.sendAlert(e)
-	# 		syslog.syslog('%s RequestException: %s' % (self.name, e))
- 	#    	sys.exit(1)
-
-	# def sendAlert(self, errorMsg):
-	# 	if self.is_ssl:
-	# 		subject = 'WARNING!!! Gatekeeper Alert for %s(SSL)' % self.name
-	# 	else:
-	# 		subject = 'WARNING!!! Gatekeeper Alert for %s' % self.name
-	# 	recipients = Config.get('basic', 'recipients').split(',')
-	# 	self.sendEmail(errorMsg, subject, recipients)
-
 	def addToQueue(self, res):
 		for k, v in self.rules.items():
 			if v.queue.has_key(res["host"]):
@@ -154,27 +112,6 @@ class Gatekeeper(threading.Thread):
 					self.addToQueue(res)
 
 				else:
-					## Ping the webApp to check whether it is alive or not.
-					# if checkThread:
-					# 	if not self.is_ssl:
-					# 		syslog.syslog('%s gatekeeper thread restarting...' % self.name)
-					# 	else:
-					# 		syslog.syslog('%s ssl gatekeeper thread restarting...' % self.name)
-					# 	break
-					# else:
-					# 	sleepTime = 600
-					# 	for i in range(0, 5):
-					# 		(checkThread, errorMsg) = self.pingWebApp()
-					# 		if checkThread:
-					# 			sleepTime = 30
-					# 			break
-					# 		time.sleep(10)
-
-					# 	if not checkThread:
-					# 		self.sendAlert(errorMsg)
-					# 	time.sleep(sleepTime)
-					# 	continue
-						
 					if threadLife == 0:
 						if not self.is_ssl:
 							syslog.syslog('%s gatekeeper thread restarting...' % self.name)
@@ -189,9 +126,6 @@ class Gatekeeper(threading.Thread):
 		except IOError:
 			syslog.syslog('Error(%s): can\'t find file (%s) or read data.' % (self.name, self.access_log))
 
-		# Restart thread.
-		# if checkThread:
-		# 	self.run()
 		if threadLife == 0:
 			self.run()
 
