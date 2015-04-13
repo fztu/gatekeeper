@@ -9,8 +9,20 @@ Gatekeeper
 
 The required python packages need to be installed.
 
-* pyipinfodb(https://github.com/mossberg/pyipinfodb)
-	
+* pyipinfodb (https://github.com/mossberg/pyipinfodb)
+* requests (http://docs.python-requests.org/en/latest/)
+* sh (http://amoffat.github.io/sh/tutorials/1-real_time_output.html)
+* json
+* csv
+* ConfigParser	
 ```bash
 # python-pip install git+git://github.com/markmossberg/pyipinfodb.git
+# python-pip install requests
+# python-pip install sh
+# python-pip install json
+# python-pip install csv
+# python-pip install ConfigParser
 ```
+
+
+
