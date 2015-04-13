@@ -10,6 +10,7 @@ Gatekeeper
 The required python packages need to be installed.
 
 * pyipinfodb(https://github.com/mossberg/pyipinfodb)
-	```bash
-	#python-pip install git+git://github.com/markmossberg/pyipinfodb.git
-	```
+	
+```bash
+# python-pip install git+git://github.com/markmossberg/pyipinfodb.git
+```
