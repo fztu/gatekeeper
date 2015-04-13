@@ -1,1 +1,0 @@
-from pyipinfodb import *

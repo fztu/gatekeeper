@@ -14,8 +14,6 @@ import StringIO
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 import sys
-
-sys.path.append('/opt/gatekeeper')
 import pyipinfodb
 
 Config = ConfigParser.ConfigParser()
