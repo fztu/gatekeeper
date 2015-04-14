@@ -34,21 +34,6 @@ def synchronized(lock):
 		return newFunction
 	return wrap
 
-class Timezone(datetime.tzinfo):
-	def __init__(self, name="+0000"):
-		self.name = name
-		seconds = int(name[:-2])*3600+int(name[-2:])*60
-		self.offset = datetime.timedelta(seconds=seconds)
-
-	def utcoffset(self, dt):
-		return self.offset
-
-	def dst(self, dt):
-		return datetime.timedelta(0)
-
-	def tzname(self, dt):
-		return self.name
-
 class Gatekeeper(threading.Thread):
 	def __init__(self, appname, access_log, is_ssl=0):
 		threading.Thread.__init__(self)

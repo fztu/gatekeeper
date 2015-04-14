@@ -14,7 +14,8 @@ The required python packages need to be installed.
 * sh (http://amoffat.github.io/sh/tutorials/1-real_time_output.html)
 * json
 * csv
-* ConfigParser	
+* ConfigParser
+* psutil (https://github.com/giampaolo/psutil)	
 ```bash
 # python-pip install git+git://github.com/markmossberg/pyipinfodb.git
 # python-pip install requests
@@ -22,6 +23,7 @@ The required python packages need to be installed.
 # python-pip install json
 # python-pip install csv
 # python-pip install ConfigParser
+# python-pip install psutil
 ```
 
 
