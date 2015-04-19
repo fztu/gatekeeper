@@ -17,13 +17,13 @@ The required python packages need to be installed.
 * ConfigParser
 * psutil (https://github.com/giampaolo/psutil)	
 ```bash
-# python-pip install git+git://github.com/markmossberg/pyipinfodb.git
-# python-pip install requests
-# python-pip install sh
-# python-pip install json
-# python-pip install csv
-# python-pip install ConfigParser
-# python-pip install psutil
+# pip install git+git://github.com/markmossberg/pyipinfodb.git
+# pip install requests
+# pip install sh
+# pip install json
+# pip install csv
+# pip install ConfigParser
+# pip install psutil
 ```
 
 
